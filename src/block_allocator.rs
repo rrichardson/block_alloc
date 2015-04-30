@@ -1,4 +1,5 @@
 //! Basic block allocator implementation
+//!
 //! (c) 2015 Rick Richardson <rick.richardson@gmail.com>
 //!
 //!
@@ -15,6 +16,24 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Multiple allocators may be in use at any time, but their buffers may not be
 /// used interchangibly :)
 ///
+/// Note : This allocator will produce blocks in sizes of powers of two, but guarantees
+/// that it will provide a buffer at least as large as what you specify, it also keeps
+/// some basic accounting information in the head of each buffer, this means that if you
+/// specify a block_size of 256, it will create buffers of size 512 in order to accomodate
+/// your basic requirement of 256 usable bytes.
+///
+/// # Example
+/// ```
+/// use block_allocator::Allocator;
+///
+/// //reserve 100 usable blocks of size 500 bytes
+/// let myalloc = Allocator::new(500, 100).unwrap();
+/// let ptr = myalloc.alloc().unwrap();
+///
+/// //do stuff
+///
+/// myalloc.free(ptr);
+/// ```
 ///
 pub struct Allocator {
     head : AtomicUsize,
@@ -41,23 +60,21 @@ impl Allocator {
 
         unsafe {
             let p = rgn.data();
-            let mut i = 0u32;
 
-            while i < num_blocks {
-                let cell = p.offset(i as isize * adjsz as isize) as *mut u32;
+            for i in 0 .. num_blocks {
+                let cell = p.offset(adjsz as isize * i as isize) as *mut u32;
                 *cell = i;
-                i += 1;
             }
-            let cell = p.offset( (i - 1) as isize * adjsz as isize) as *mut u32;
+            let cell = p.offset( (num_blocks - 1) as isize * adjsz as isize) as *mut u32;
             *cell = u32::MAX; //sentinel value indicating end of list
-
-            Ok(Allocator {
-                head : AtomicUsize::new(0),
-                block_size : block_size,
-                _num_blocks : num_blocks,
-                region : rgn
-            })
         }
+        Ok(Allocator {
+            head : AtomicUsize::new(0),
+            block_size : adjsz,
+            _num_blocks : num_blocks,
+            region : rgn
+        })
+
     }
 
     pub fn alloc(&self) -> Option<*mut u8> {
@@ -119,3 +136,26 @@ fn next_pow_of_2(mut n : u32) -> u32
     n += 1;
     n
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basic() {
+        let myalloc = Allocator::new(200, 100).unwrap();
+        let ptr = myalloc.alloc().unwrap();
+        myalloc.free(ptr);
+    }
+
+    #[test]
+    fn max_cap() {
+        let myalloc = Allocator::new(200, 10).unwrap();
+        for _ in 0..10 {
+            let ptr = myalloc.alloc().unwrap();
+        }
+        let ptr = myalloc.alloc();
+        assert!(ptr.is_none());
+    }
+}
+
