@@ -1,0 +1,9 @@
+[package]
+name = "block_allocator"
+version = "0.1.0"
+authors = ["Rick Richardson <rick.richardson@gmail.com>"]
+license-file = "LICENSE"
+
+[dependencies]
+mmap = "*"
+
