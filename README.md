@@ -1,7 +1,7 @@
 
 # Block Allocator
 
-[![crates.io](https://img.shields.io/crates/v/iobuf.svg)](https://crates.io/crates/block_allocator/)
+[![crates.io](https://img.shields.io/crates/v/block_allocator.svg)](https://crates.io/crates/block_allocator/)
 
 [![Build Status](https://travis-ci.org/rrichardson/block_alloc.svg?branch=master)](https://travis-ci.org/rrichardson/block_alloc)
 
