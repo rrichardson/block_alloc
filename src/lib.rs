@@ -11,8 +11,16 @@
 //! * (all of these due to a present limitation in Atomic types)
 //!
 //!
+#![feature(test)]
+#![feature(core)]
+
 extern crate mmap;
+extern crate iobuf;
+extern crate test;
+extern crate core;
 
 mod block_allocator;
+mod buf;
 
 pub use block_allocator::Allocator;
+pub use buf::*;

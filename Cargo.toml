@@ -6,4 +6,4 @@ license-file = "LICENSE"
 
 [dependencies]
 mmap = "*"
-
+iobuf = "*"
