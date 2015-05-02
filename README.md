@@ -3,7 +3,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/iobuf.svg)](https://crates.io/crates/block_allocator/)
 
-[![Build Status](https://travis-ci.org/cgaebel/iobuf.svg?branch=master)](https://travis-ci.org/rrichardson/block_alloc)
+[![Build Status](https://travis-ci.org/rrichardson/block_alloc.svg?branch=master)](https://travis-ci.org/rrichardson/block_alloc)
 
 This is a basic, thread-safe, fixed sized arena which allocates re-usable blocks
 of your specified sized. Re-usable meaning this isn't a basic arena which is
