@@ -35,6 +35,11 @@ then you can alloc and free to your heart`s content
 ```rust
     let buf : &mut [u8] = myalloc.alloc();
     myalloc.free(buf);
+
+    or
+
+    let ptr : *mut u8 = myalloc.alloc_raw();
+    myalloc.free_raw(ptr);
 ```
 
 ## Iobuf support
