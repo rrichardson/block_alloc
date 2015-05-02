@@ -230,7 +230,7 @@ mod tests {
         let threads : Vec<thread::JoinHandle<()>> = (0..3).map(|_| {
             let ma = myalloc.clone();
             thread::spawn(move || {
-                for _ in (0 .. 10000) {
+                for _ in (0 .. 1000000) {
                     let p = ma.alloc_raw().unwrap();
                     ma.free_raw(p);
                     let p = ma.alloc_raw().unwrap();
