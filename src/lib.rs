@@ -13,6 +13,8 @@
 //!
 #![feature(test)]
 #![feature(core)]
+#![feature(raw)]
+#![feature(nonzero)]
 
 extern crate mmap;
 extern crate iobuf;
