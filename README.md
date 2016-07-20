@@ -26,8 +26,8 @@ To use it, simply construct a new allocator, specifying the size of the block an
 the allocator to manage (note that this number is not growable at runtime, so choose wisely)
 
 ```rust
-    // create blocks of size 200 with a max of 100
-    let myalloc = Allocator::new(200, 100).unwrap();
+    // create blocks of size 256 with a max of 100
+    let myalloc = Allocator::new(256, 100).unwrap();
 ```
 
 then you can alloc and free to your heart`s content
@@ -42,9 +42,5 @@ then you can alloc and free to your heart`s content
     myalloc.free_raw(ptr);
 ```
 
-## Iobuf support
-
-This implements the Iobuf::Allocator trait, so it can be used to construct [Iobufs](https://github.com/cgaebel/iobuf)
-which are very efficient reference counted, thread-safe buffers.
 
 
