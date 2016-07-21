@@ -10,6 +10,8 @@ use std::mem;
 use std::u32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::slice;
+use std::error::Error;
+use std::fmt::{self, Display};
 use std::marker::PhantomData;
 
 /// Allocator
@@ -42,28 +44,28 @@ use std::marker::PhantomData;
 /// ```
 ///
 pub struct Allocator<'a> {
-    head : AtomicUsize,
-    block_size : u32,
-    region : MemoryMap,
-    _num_blocks : u32,
-    _phantom: PhantomData<&'a u8>
+head : AtomicUsize,
+     block_size : u32,
+     region : MemoryMap,
+     num_blocks : u32,
+     _phantom: PhantomData<&'a u8>
 }
 
 impl<'a> Allocator<'a> {
 
-
-    pub fn new(block_size: u32, num_blocks: u32) -> Result<Allocator<'a>, String> {
+    /// Constructs a new Block Allocator
+    pub fn new(block_size: u32, num_blocks: u32) -> Result<Allocator<'a>, AllocError> {
         // for now this can only work on 64 bit platforms
         // it would be nice to have atomics other than register sizes
         assert!(mem::size_of::<isize>() >= mem::size_of::<u64>());
         assert!(num_blocks < u32::MAX); //we can support u32::MAX - 1 entries
-        assert!(block_size != 0);
-        assert!(num_blocks != 0);
+        assert!(block_size >= mem::size_of::<u32>() as u32);
+        assert!(num_blocks > 0);
         assert!(block_size.is_power_of_two());
         let rgn = match MemoryMap::new(block_size as usize * num_blocks as usize,
-                                        &[MapOption::MapReadable, MapOption::MapWritable]) {
+                &[MapOption::MapReadable, MapOption::MapWritable]) {
             Ok(r) => r,
-            Err(e) => return Err(format!("{}", e))
+            Err(e) => return Err(AllocError::MemoryMapFail(format!("{}", e)))
         };
 
         unsafe {
@@ -79,35 +81,38 @@ impl<'a> Allocator<'a> {
         Ok(Allocator {
             head : AtomicUsize::new(0),
             block_size : block_size,
-            _num_blocks : num_blocks,
+            num_blocks : num_blocks,
             region : rgn,
             _phantom: PhantomData
         })
 
     }
 
-    pub fn alloc(&self) -> Option<&'a mut [u8]> { unsafe {
+    /// Acquire the next free buffer from the allocator's slab
+    pub fn alloc(&self) -> Result<&'a mut [u8], AllocError> { unsafe {
         self.alloc_raw().map(|a|
             slice::from_raw_parts_mut(a, self.block_size as usize)
         )
     }}
 
-    pub fn free(&self, buf: &'a mut [u8]) {
-        self.free_raw(buf.as_mut_ptr());
+    /// Free the buffer back into the allocator's slab
+    pub fn free(&self, buf: &'a mut [u8]) -> Result<(), AllocError> {
+        self.free_raw(buf.as_mut_ptr())
     }
 
-    pub fn alloc_raw(&self) -> Option<*mut u8> {
+    /// Acquire the next buffer as a raw `std::u8` pointer from the allocator's slab
+    pub fn alloc_raw(&self) -> Result<*mut u8, AllocError> {
 
-        let mut hd = self.head.load(Ordering::Relaxed);
+        let mut hd = self.head.load(Ordering::Acquire);
         let hd_ary : &[u32 ;2] = unsafe { mem::transmute(&hd) };
         let mut offset = hd_ary[0]; //top 32 bits are the offset to the start of the free list
         //println!("alloc - Loaded head {} | {}", hd_ary[0], hd_ary[1]);
         if offset == u32::MAX {
-            return None;
+            return Err(AllocError::NoMemory);
         }
 
         loop {
-            
+
             offset = self.get_next_offset(hd_ary[0]);
             let counter = hd_ary[1];
             let newhd_ary = [offset, counter.wrapping_add(1)];
@@ -115,23 +120,38 @@ impl<'a> Allocator<'a> {
             let oldhead = hd;
             hd = self.head.compare_and_swap(hd, unsafe { mem::transmute(newhd_ary) }, Ordering::SeqCst);
             if hd == oldhead { 
-                return Some(self.get_cell(hd_ary[0]))
+                return Ok(self.get_cell(hd_ary[0]))
             }
             if hd_ary[0] == u32::MAX {
-                return None;
+                return Err(AllocError::NoMemory);
             }
         }
     }
 
-    pub fn free_raw(&self, item : *mut u8) { unsafe {
+    /// Free a raw (previously alloc'd pointer) back into the allocator's slab
+    pub fn free_raw(&self, item : *mut u8) -> Result<(), AllocError> { unsafe {
 
-        let cell = item.offset(-1 * (mem::size_of::<u32>() as isize));
-        //println!("free  - cell ptr {:p} and value {}", cell, *(cell as *mut u32));
+        if item.is_null() {
+            return Err(AllocError::BadArgument("Null".to_string()));
+        }
+
+        let cell = item.offset(-(mem::size_of::<u32>() as isize));
 
         let cell_addr : usize = mem::transmute(cell);
         let start_addr : usize = mem::transmute(self.region.data());
+        let end_addr : usize = mem::transmute(self.region.data().offset((self.block_size * self.num_blocks) as isize));
+
+        if (cell_addr < start_addr) || (cell_addr > end_addr) {
+            return Err(AllocError::BadArgument("Out of bounds".to_string()));
+        }
+
+        //ensure that the ptr falls on the alignment of the block_size
+        if (cell_addr & (self.block_size as usize - 1)) != 0 {
+            return Err(AllocError::BadArgument("Misaligned value".to_string()));
+        }
+
         let newoffset = (cell_addr - start_addr) as u32 / self.block_size;
-        let mut hd = self.head.load(Ordering::Relaxed);
+        let mut hd = self.head.load(Ordering::Acquire);
         let hd_ary : &[u32; 2] = mem::transmute(&hd);
         //println!("free  - Loaded head {} | {}", hd_ary[0], hd_ary[1]);
 
@@ -139,7 +159,7 @@ impl<'a> Allocator<'a> {
             let counter = hd_ary[1];
             //println!("free  - Setting newhd to {} | {}",  newoffset, counter.wrapping_add(1));
             let newhd_ary = [newoffset,  counter.wrapping_add(1)];
-            
+
             let oldhead = hd;
             let oldhd_ary : &[u32; 2] = mem::transmute(&oldhead);
             //println!("free  - Setting cell to {}", oldhd_ary[0]);
@@ -150,6 +170,8 @@ impl<'a> Allocator<'a> {
                 break; 
             }
         }
+
+        Ok(())
     }}
 
     #[inline(always)]
@@ -180,6 +202,37 @@ fn _next_pow_of_2(mut n : u32) -> u32
     n
 }
 
+#[derive(Debug)]
+pub enum AllocError {
+    BadArgument(String),
+    MemoryMapFail(String), 
+    NoMemory,
+}
+
+impl Display for AllocError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &AllocError::BadArgument(ref s) => write!(f, "Bad Argument : {}", s),
+            &AllocError::MemoryMapFail(ref s) => write!(f, "Memory Map Failure : {}", s),
+            &AllocError::NoMemory => write!(f, "Out of memory")
+        }
+    }
+}
+
+impl Error for AllocError {
+    fn description(&self) -> &str {
+        match self {
+            &AllocError::BadArgument(_) => "Bad Argument",
+            &AllocError::MemoryMapFail(_) => "Memory Map Failure",
+            &AllocError::NoMemory => "Out of memory"
+        }
+    }
+
+    fn cause(&self) -> Option<&Error> { 
+        None 
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,24 +240,24 @@ mod tests {
     use std::sync::Arc;
     use test::Bencher;
     use std::mem;
-    #[test]
+#[test]
     fn basic() {
         let myalloc = Allocator::new(256, 100).unwrap();
         let ptr = myalloc.alloc_raw().unwrap();
         myalloc.free_raw(ptr);
     }
 
-    #[test]
+#[test]
     fn max_cap() {
         let myalloc = Allocator::new(256, 10).unwrap();
         for _ in 0..10 {
             let _ = myalloc.alloc_raw().unwrap();
         }
         let ptr = myalloc.alloc_raw();
-        assert!(ptr.is_none());
+        assert!(ptr.is_err());
     }
 
-    #[test]
+#[test]
     fn sizing() { unsafe {
         let myalloc = Allocator::new(256, 10).unwrap();
         let a = myalloc.alloc_raw().unwrap();
@@ -216,13 +269,13 @@ mod tests {
         assert!(diff >= 256);
     } }
 
-    #[test]
+#[test]
     fn up_down() {
         let myalloc = Allocator::new(256, 10).unwrap();
         let ptrs : Vec<*mut u8> = (0..10).map(|_| myalloc.alloc_raw().unwrap()).collect();
 
         let ptr = myalloc.alloc_raw();
-        assert!(ptr.is_none());
+        assert!(ptr.is_err());
 
         for p in ptrs.iter() {
             myalloc.free_raw(*p);
@@ -231,23 +284,23 @@ mod tests {
         let ptrs : Vec<*mut u8> = (0..10).map(|_| myalloc.alloc_raw().unwrap()).collect();
 
         let ptr = myalloc.alloc_raw();
-        assert!(ptr.is_none());
+        assert!(ptr.is_err());
 
         for p in ptrs.iter() {
             myalloc.free_raw(*p);
         }
 
         let ptr = myalloc.alloc_raw();
-        assert!(ptr.is_some());
+        assert!(ptr.is_ok());
     }
-    #[test]
+#[test]
     fn concurrency() {
         let myalloc = Arc::new(Allocator::new(256, 1000).unwrap());
 
         let threads : Vec<thread::JoinHandle<()>> = (0..10).map(|_| {
             let ma = myalloc.clone();
             thread::spawn(move || {
-                for _ in (0 .. 100000) {
+                for _ in 0 .. 100000 {
                     let p = ma.alloc_raw().unwrap();
                     ma.free_raw(p);
                     let p = ma.alloc_raw().unwrap();
@@ -256,8 +309,8 @@ mod tests {
                     ma.free_raw(p);
                     let p = ma.alloc_raw().unwrap();
                     ma.free_raw(p);
-                }
-        }) }).collect();
+                    }
+        })}).collect();
 
         for t in threads {
             t.join().unwrap();
@@ -267,16 +320,41 @@ mod tests {
         let _ : Vec<*mut u8> = (0..1000).map(|_| myalloc.alloc_raw().unwrap()).collect();
         // then this should fail
         let ptr = myalloc.alloc_raw();
-        assert!(ptr.is_none());
+        assert!(ptr.is_err());
     }
 
-    #[bench]
+#[bench]
     fn speedtest(b: &mut Bencher) {
         let myalloc = Arc::new(Allocator::new(256, 1000).unwrap());
         b.iter(||{
-            let p = myalloc.alloc_raw().unwrap();
-            myalloc.free_raw(p);
-        });
+                let p = myalloc.alloc_raw().unwrap();
+                myalloc.free_raw(p);
+                });
     }
+
+#[bench]
+    fn concurrent_speed(b: &mut Bencher) {
+        let myalloc = Arc::new(Allocator::new(256, 1000).unwrap());
+        b.iter(||{
+            let threads : Vec<thread::JoinHandle<()>> = (0..20).map(|_| {
+                let ma = myalloc.clone();
+                thread::spawn(move || {
+                    for _ in 0 .. 1000 {
+                        let p = ma.alloc_raw().unwrap();
+                        ma.free_raw(p);
+                        let p = ma.alloc_raw().unwrap();
+                        ma.free_raw(p);
+                        let p = ma.alloc_raw().unwrap();
+                        ma.free_raw(p);
+                        let p = ma.alloc_raw().unwrap();
+                        ma.free_raw(p);
+                        }
+            })}).collect();
+
+            for t in threads {
+                t.join().unwrap();
+            }
+       });
+   }
 }
 
