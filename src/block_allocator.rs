@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 
 /// Allocator
 /// Provides fixed-sized buffers from a pre-allocated arena specified at creation
-/// Current limitations: Max number of buffers it can produce is u32::MAX - 1
+/// Current limitations: Max number of buffers it can produce is `u32::MAX` - 1
 /// Multiple allocators may be in use at any time, but their buffers may not be
 /// used interchangibly :)
 ///
@@ -214,20 +214,20 @@ pub enum AllocError {
 
 impl Display for AllocError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &AllocError::BadArgument(ref s) => write!(f, "Bad Argument : {}", s),
-            &AllocError::MemoryMapFail(ref s) => write!(f, "Memory Map Failure : {}", s),
-            &AllocError::NoMemory => write!(f, "Out of memory")
+        match *self {
+            AllocError::BadArgument(ref s) => write!(f, "Bad Argument : {}", s),
+            AllocError::MemoryMapFail(ref s) => write!(f, "Memory Map Failure : {}", s),
+            AllocError::NoMemory => write!(f, "Out of memory")
         }
     }
 }
 
 impl Error for AllocError {
     fn description(&self) -> &str {
-        match self {
-            &AllocError::BadArgument(_) => "Bad Argument",
-            &AllocError::MemoryMapFail(_) => "Memory Map Failure",
-            &AllocError::NoMemory => "Out of memory"
+        match *self {
+            AllocError::BadArgument(_) => "Bad Argument",
+            AllocError::MemoryMapFail(_) => "Memory Map Failure",
+            AllocError::NoMemory => "Out of memory"
         }
     }
 
