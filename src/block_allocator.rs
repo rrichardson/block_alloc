@@ -97,6 +97,9 @@ impl<'a> Allocator<'a> {
 
     /// Free the buffer back into the allocator's slab
     pub fn free(&self, buf: &'a mut [u8]) -> Result<(), AllocError> {
+        if buf.len() as u32 != self.block_size {
+          return Err(AllocError::BadArgument("Slice != allocator's block_size".to_string()));
+        }
         self.free_raw(buf.as_mut_ptr())
     }
 
