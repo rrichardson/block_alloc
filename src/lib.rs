@@ -5,8 +5,8 @@
 //! Provides fixed size, buffers out of a pre-allocated arena.
 //!
 //! # Limitations
-//! * Max number of buffers that can be provided is u32::MAX - 1
-//! * Max size of a buffer is u32::MAX
+//! * Max number of buffers that can be provided is `u32::MAX` - 1
+//! * Max size of a buffer is `u32::MAX`
 //! * Currently only works on 64 bit architectures
 //! * (all of these due to a present limitation in Atomic types)
 //!
