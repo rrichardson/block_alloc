@@ -5,6 +5,7 @@
 *.dll
 *.swp
 *.swo
+*.log
 
 # Executables
 *.exe

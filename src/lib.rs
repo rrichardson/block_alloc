@@ -13,7 +13,7 @@
 //!
 #![feature(test)]
 
-extern crate mmap;
+extern crate memmap;
 extern crate test;
 extern crate core;
 
