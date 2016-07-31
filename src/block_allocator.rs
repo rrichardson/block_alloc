@@ -1,19 +1,22 @@
 //! Basic block allocator implementation
 //!
-//! (c) 2015 Rick Richardson <rick.richardson@gmail.com>
+//! (c) 2015, 2016 Rick Richardson <rick.richardson@gmail.com>
 //!
 //!
 //!
 
+
 use memmap::{Mmap, Protection};
 use std::mem;
 use std::u32;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicU32, Ordering};
 use std::slice;
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::marker::PhantomData;
 use std::cell::UnsafeCell;
+
+const PAGE_SIZE : u32 = (1 << 12);
 
 /// Allocator
 /// Provides fixed-sized buffers from a pre-allocated arena specified at creation
@@ -47,6 +50,7 @@ use std::cell::UnsafeCell;
 pub struct Allocator<'a> {
 head : AtomicUsize,
      block_size : u32,
+     freelist : UnsafeCell<&'static [AtomicU32]>,
      data : UnsafeCell<*mut u8>,
      _region : Mmap,
      num_blocks : u32,
@@ -64,32 +68,36 @@ impl<'a> Allocator<'a> {
         assert!(block_size >= mem::size_of::<u32>() as u32);
         assert!(num_blocks > 0);
         assert!(block_size.is_power_of_two());
-        let mut rgn = match Mmap::anonymous(block_size as usize * num_blocks as usize, Protection::ReadWrite) {
+
+        let table_size = num_blocks * mem::size_of::<u32>() as u32;
+        let table_size = PAGE_SIZE + (table_size & !(PAGE_SIZE - 1)); 
+
+        let mut rgn = match Mmap::anonymous(table_size as usize + (block_size as usize * num_blocks as usize), Protection::ReadWrite) {
             Ok(r) => r,
             Err(e) => return Err(AllocError::MemoryMapFail(format!("{}", e)))
         };
 
-        let data = unsafe {
-            let p = rgn.mut_ptr();
-            let start = p;
-            for i in 0 .. num_blocks {
-                let cell = p.offset(block_size as isize * i as isize) as *mut u32;
-                *cell = i + 1;
-            }
-            let cell = p.offset( (num_blocks - 1) as isize * block_size as isize) as *mut u32;
-            *cell = u32::MAX; //sentinel value indicating end of list
-            UnsafeCell::new(start)
+        let table : &[AtomicU32] = unsafe {
+            slice::from_raw_parts_mut(mem::transmute::<_,_>(rgn.mut_ptr()), num_blocks as usize)
         };
+
+        //initialize the "linked list" within the table
+        for i in 0 .. (num_blocks as usize - 1) {
+            table[i].store(i as u32 + 1, Ordering::Relaxed);
+        }
+        table[num_blocks as usize - 1].store(u32::MAX, Ordering::Relaxed); //sentinel value indicating end of list
+
+        let data = unsafe { rgn.mut_ptr().offset(table_size as isize) };
 
         Ok(Allocator {
             head : AtomicUsize::new(0),
             block_size : block_size,
             num_blocks : num_blocks,
             _region : rgn,
-            data : data,
+            data : UnsafeCell::new(data),
+            freelist : UnsafeCell::new(table),
             _phantom: PhantomData
         })
-
     }
 
     /// Acquire the next free buffer from the allocator's slab
@@ -137,14 +145,14 @@ impl<'a> Allocator<'a> {
 
     /// Free a raw (previously alloc'd pointer) back into the allocator's slab
     pub unsafe fn free_raw(&self, item : *mut u8) -> Result<(), AllocError> {
-
+        // this gets the offset from the pointer that is being freed, then
+        // uses that in the freelist table.  The offset becomes the new head
+        // and the previous head becomes the 'next' offset
         if item.is_null() {
             return Err(AllocError::BadArgument("Null".to_string()));
         }
 
-        let cell = item.offset(-(mem::size_of::<u32>() as isize));
-
-        let cell_addr : usize = mem::transmute(cell);
+        let cell_addr : usize = mem::transmute(item);
         let start_addr : usize = mem::transmute(*self.data.get());
         let end_addr : usize = mem::transmute((*self.data.get()).offset((self.block_size * self.num_blocks) as isize));
 
@@ -169,8 +177,8 @@ impl<'a> Allocator<'a> {
 
             let oldhead = hd;
             let oldhd_ary : &[u32; 2] = mem::transmute(&oldhead);
-            //println!("free  - Setting cell to {}", oldhd_ary[0]);
-            *(cell as *mut u32) = oldhd_ary[0];
+            
+            (*self.freelist.get())[newoffset as usize].store(oldhd_ary[0], Ordering::Relaxed);
 
             hd = self.head.compare_and_swap(hd, mem::transmute(newhd_ary), Ordering::SeqCst);
             if hd == oldhead { 
@@ -183,14 +191,18 @@ impl<'a> Allocator<'a> {
 
     #[inline(always)]
     fn get_next_offset(&self, index : u32) -> u32 { unsafe {
-        let cell = (*self.data.get()).offset(index as isize * self.block_size as isize) as *const u32;
-        *cell
-    }}
+        (*self.freelist.get())[index as usize].load(Ordering::Relaxed)
+    } }
 
     #[inline(always)]
     fn get_cell(&self, index : u32) -> *mut u8 { unsafe {
-        (*self.data.get()).offset((index as isize * self.block_size as isize) + mem::size_of::<u32>() as isize)
+        (*self.data.get()).offset(index as isize * self.block_size as isize)
     }}
+
+    #[inline(always)]
+    pub fn get_block_size(&self) -> u32 {
+        self.block_size
+    }
 }
 
 unsafe impl<'a> Send for Allocator<'a> {}
@@ -419,6 +431,15 @@ mod tests {
 #[bench]
     fn speedtest(b: &mut Bencher) {
         let myalloc = Arc::new(Allocator::new(256, 1000).unwrap());
+        b.iter(||{
+                let p = myalloc.alloc().unwrap();
+                myalloc.free(p).unwrap();
+                });
+    }
+
+#[bench]
+    fn speedtest_big(b: &mut Bencher) {
+        let myalloc = Arc::new(Allocator::new(1 << 14, 1000).unwrap());
         b.iter(||{
                 let p = myalloc.alloc().unwrap();
                 myalloc.free(p).unwrap();

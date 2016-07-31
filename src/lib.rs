@@ -13,6 +13,8 @@
 //!
 #![feature(test)]
 
+#![feature(integer_atomics)]
+
 extern crate memmap;
 extern crate test;
 extern crate core;
