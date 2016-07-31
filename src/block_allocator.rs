@@ -159,9 +159,10 @@ impl<'a> Allocator<'a> {
         if (cell_addr < start_addr) || (cell_addr > end_addr) {
             return Err(AllocError::BadArgument("Out of bounds".to_string()));
         }
+        
 
         //ensure that the ptr falls on the alignment of the block_size
-        if (cell_addr & (self.block_size as usize - 1)) != 0 {
+        if ((cell_addr - start_addr) & (self.block_size as usize - 1)) != 0 {
             return Err(AllocError::BadArgument("Misaligned value".to_string()));
         }
 
@@ -263,6 +264,13 @@ mod tests {
 #[test]
     fn basic() {
         let myalloc = Allocator::new(256, 100).unwrap();
+        let ptr = myalloc.alloc().unwrap();
+        myalloc.free(ptr).unwrap();
+    }
+
+#[test]
+    fn realbig() {
+        let myalloc = Allocator::new(2 << 14, 100000).unwrap();
         let ptr = myalloc.alloc().unwrap();
         myalloc.free(ptr).unwrap();
     }
