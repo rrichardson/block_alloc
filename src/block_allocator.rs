@@ -24,9 +24,8 @@ const PAGE_SIZE : u32 = (1 << 12);
 /// Multiple allocators may be in use at any time, but their buffers may not be
 /// used interchangibly :)
 ///
-/// Note : This allocator will only produce blocks in sizes of powers of two, but
-/// the usable buffer space is going to be 4 bytes smaller than the requested size
-/// so if you need the full power of 2 space, request the next power of 2
+/// Note : This allocator will only produce blocks in sizes of powers of two. Any size
+/// requested that isn't a power of two will result in an error
 ///
 /// Implementation
 /// This keeps track of the next available buffer in the slab using a Double CAS Treiber Stack
