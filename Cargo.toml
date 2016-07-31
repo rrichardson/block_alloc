@@ -1,6 +1,6 @@
 [package]
 name = "block_allocator"
-version = "0.2.1"
+version = "0.2.2"
 description = "Thread-safe, fixed-size allocator that serves re-usable blocks"
 repository = "https://github.com/rrichardson/block_alloc"
 homepage = "https://github.com/rrichardson/block_alloc"
