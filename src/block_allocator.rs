@@ -6,7 +6,7 @@
 //!
 
 
-use memmap::{Mmap, Protection};
+use memmap::MmapMut;
 use std::mem;
 use std::u32;
 use std::sync::atomic::{AtomicUsize, AtomicU32, Ordering};
@@ -51,7 +51,7 @@ head : AtomicUsize,
      block_size : u32,
      freelist : UnsafeCell<&'static [AtomicU32]>,
      data : UnsafeCell<*mut u8>,
-     _region : Mmap,
+     _region : MmapMut,
      num_blocks : u32,
      _phantom: PhantomData<&'a u8>
 }
@@ -71,13 +71,13 @@ impl<'a> Allocator<'a> {
         let table_size = num_blocks * mem::size_of::<u32>() as u32;
         let table_size = PAGE_SIZE + (table_size & !(PAGE_SIZE - 1)); 
 
-        let mut rgn = match Mmap::anonymous(table_size as usize + (block_size as usize * num_blocks as usize), Protection::ReadWrite) {
+        let mut rgn = match MmapMut::map_anon(table_size as usize + (block_size as usize * num_blocks as usize)) {
             Ok(r) => r,
             Err(e) => return Err(AllocError::MemoryMapFail(format!("{}", e)))
         };
 
         let table : &[AtomicU32] = unsafe {
-            slice::from_raw_parts_mut(mem::transmute::<_,_>(rgn.mut_ptr()), num_blocks as usize)
+            slice::from_raw_parts_mut(mem::transmute::<_,_>(rgn.as_mut_ptr()), num_blocks as usize)
         };
 
         //initialize the "linked list" within the table
@@ -86,7 +86,7 @@ impl<'a> Allocator<'a> {
         }
         table[num_blocks as usize - 1].store(u32::MAX, Ordering::Relaxed); //sentinel value indicating end of list
 
-        let data = unsafe { rgn.mut_ptr().offset(table_size as isize) };
+        let data = unsafe { rgn.as_mut_ptr().offset(table_size as isize) };
 
         Ok(Allocator {
             head : AtomicUsize::new(0),
