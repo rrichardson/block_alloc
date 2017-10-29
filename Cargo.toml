@@ -8,4 +8,4 @@ authors = ["Rick Richardson <rick.richardson@gmail.com>"]
 license-file = "LICENSE"
 
 [dependencies]
-memmap = "~0.4"
+memmap = "0.6"
